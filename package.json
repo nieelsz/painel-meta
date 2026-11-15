@@ -1,0 +1,20 @@
+{
+  "name": "painel-anuncios",
+  "version": "1.0.0",
+  "description": "Painel de vendas e gestão de anúncios Meta (multi-contas)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.2.0",
+    "dotenv": "^18.0.10",
+    "echarts": "^6.1.0",
+    "express": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true
+}
