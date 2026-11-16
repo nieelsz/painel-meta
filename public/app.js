@@ -63,9 +63,9 @@ function periodRange() {
 // estado (persistido)
 const S = Object.assign({ period: 'today', operation: '', account: '', product: '', from: '', to: '' }, JSON.parse(localStorage.getItem('painel') || '{}'));
 const save = () => localStorage.setItem('painel', JSON.stringify({ period: S.period, operation: S.operation, account: S.account, product: S.product, from: S.from, to: S.to }));
-const G = { accounts: [], operations: [], products: [], config: {} };
+const G = { accounts: [], operations: [], products: [], config: {}, settings: {} };
 async function loadGlobals() {
-  [G.accounts, G.operations, G.products, G.config] = await Promise.all([api('/api/meta/accounts'), api('/api/operations'), api('/api/products'), api('/api/config')]);
+  [G.accounts, G.operations, G.products, G.config, G.settings] = await Promise.all([api('/api/meta/accounts'), api('/api/operations'), api('/api/products'), api('/api/config'), api('/api/settings')]);
   $('#demo').hidden = !G.config.demo;
 }
 
@@ -78,11 +78,24 @@ function periodFields() {
 function bindPeriod(reload) {
   $$('#f-period button').forEach(b => b.onclick = () => {
     S.period = b.dataset.p; $$('#f-period button').forEach(x => x.classList.toggle('active', x === b));
-    $('#f-cust1').hidden = $('#f-cust2').hidden = S.period !== 'custom'; save(); reload();
+    $('#f-cust1').hidden = $('#f-cust2').hidden = S.period !== 'custom'; save(); updateFilterSummary(); reload();
   });
   $('#f-from').onchange = e => { S.from = e.target.value; save(); reload(); };
   $('#f-to').onchange = e => { S.to = e.target.value; save(); reload(); };
 }
+const filterToggle = () => `<button type="button" class="btn ftoggle" aria-expanded="false">${svg('<path d="M3 5h18M6 12h12M10 19h4"/>')}Filtros<b></b></button>`;
+function updateFilterSummary() {
+  $$('.filters').forEach(f => {
+    const b = $('.ftoggle b', f); if (!b) return;
+    const n = $$('select', f).filter(x => x.value).length + $$('input.input:not([type=date])', f).filter(x => x.value).length;
+    b.textContent = ` · ${PERIODS[S.period]}${n ? ` · ${n} ${n > 1 ? 'filtros' : 'filtro'}` : ''}`;
+  });
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('.ftoggle'); if (!t) return;
+  const open = t.parentNode.classList.toggle('open'); t.setAttribute('aria-expanded', open);
+});
+['change', 'input'].forEach(ev => document.addEventListener(ev, e => { if (e.target.closest('.filters')) updateFilterSummary(); }));
 const accountOptions = (sel, allLabel = 'Todas') => `<option value="">${allLabel}</option>` +
   G.accounts.filter(a => a.enabled).map(a => `<option value="${esc(a.id)}" ${sel === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
 
@@ -117,6 +130,7 @@ async function route() {
   $('#title').textContent = r.title; $('#subtitle').textContent = '';
   disposeCharts(); clearInterval(timer); lastUpdate = null;
   current = await r.render();
+  updateFilterSummary();
 }
 function markUpdated() { lastUpdate = Date.now(); }
 setInterval(() => {
@@ -142,6 +156,8 @@ const I = {
   plus: svg('<path d="M12 5v14M5 12h14"/>'),
   minus: svg('<path d="M5 12h14"/>'),
   edit: svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>'),
+  grip: svg('<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>'),
+  x: svg('<path d="M18 6 6 18M6 6l12 12"/>'),
   copy: svg('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
 };
 
@@ -161,12 +177,15 @@ function delta(cur, prev, up = true) {
 const compareLabel = () => S.period === 'today' ? 'Comparado com ontem' : 'Comparado com o período anterior';
 
 async function renderDashboard() {
+  D.editing = false;
   view.innerHTML = `
   <div class="filters">
+    ${filterToggle()}
     ${periodFields()}
     <label class="field">Operação<select class="input" id="f-op"><option value="">Todas</option>${G.operations.map(o => `<option value="${o.id}" ${String(S.operation) === String(o.id) ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
     <label class="field">Conta de anúncio<select class="input" id="f-acc">${accountOptions(S.account)}</select></label>
     <label class="field">Produto<select class="input" id="f-prod"><option value="">Todos</option>${G.products.map(p => `<option ${S.product === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
+    <button class="btn edit-dash" id="edit-dash" type="button">${I.edit}Editar painel</button>
   </div>
   <div id="warn"></div>
   <div id="dash"></div>`;
@@ -174,6 +193,7 @@ async function renderDashboard() {
   $('#f-op').onchange = e => { S.operation = e.target.value; save(); load(); };
   $('#f-acc').onchange = e => { S.account = e.target.value; save(); load(); };
   $('#f-prod').onchange = e => { S.product = e.target.value; save(); load(); };
+  $('#edit-dash').onclick = startEdit;
 
   async function load() {
     const { from, to } = periodRange();
@@ -195,7 +215,7 @@ async function renderDashboard() {
     $('#dash').classList.remove('loading');
   }
   await load();
-  timer = setInterval(load, 60000);
+  timer = setInterval(() => { if (!D.editing) load(); }, 60000);
   return load;
 }
 
@@ -207,12 +227,17 @@ function money(n) {
   const s = brl(n); const i = s.lastIndexOf(',');
   return i > 0 ? `${s.slice(0, i)}<span class="cents">${s.slice(i)}</span>` : s;
 }
+const ministats = items => `<div class="card ministats" style="--n:${items.length}">${items.map(([l, v, tip]) =>
+  `<div><span class="l"${tip ? ` title="${esc(tip)}"` : ''}>${l}</span><span class="v">${v}</span></div>`).join('')}</div>`;
+const utmLabel = v => v ? String(v).split('|')[0] : '';
+const statusBadge = st => `<span class="badge ${(STATUS[st] || ['', ''])[1]}">${(STATUS[st] || [st])[0]}</span>`;
+const fmtDateTime = iso => new Date(iso).toLocaleString('pt-BR', { timeZone: TZ, dateStyle: 'short', timeStyle: 'short' });
 
-function drawDashboard(d, prev) {
-  const k = d.kpis; const pk = prev ? prev.kpis : {};
-  disposeCharts();
-  $('#dash').innerHTML = `
-  <section class="hero">
+// ---------- blocos do Resumo ----------
+// cada bloco: label (lista de "Adicionar"), size padrão (colunas de 12), html() e draw() opcional para gráficos
+const BLOCKS = {
+  hero: { label: 'Faturamento e resultado', size: 12,
+    html: (d, k, pk, prev) => `<section class="hero">
     <div class="hero-main">
       <div class="hero-label">Faturamento líquido</div>
       <div class="hero-value">${money(k.net)}</div>
@@ -230,114 +255,226 @@ function drawDashboard(d, prev) {
       <div class="hero-stat"><span class="l">ROAS <span class="tip" title="Faturamento líquido dividido pelos gastos">?</span></span><span class="v ${k.spend ? (k.roas >= 1 ? 'pos' : 'neg') : ''}">${num(k.roas, 2)}</span>${delta(k.roas, pk.roas)}</div>
       <div class="hero-stat"><span class="l">ROI <span class="tip" title="Lucro dividido pelos gastos">?</span></span><span class="v ${cls(k.roi)}">${pct(k.roi)}</span>${delta(k.roi, pk.roi)}</div>
     </div>
-  </section>
+  </section>`,
+    draw: d => {
+      const single = d.daily.length === 1;
+      let acc = 0;
+      const nowH = Number(new Date().toLocaleString('en-US', { timeZone: TZ, hour: 'numeric', hour12: false }));
+      const spark = single ? d.hours.filter(h => d.range.to !== todayStr() || h.hour <= nowH).map(h => (acc += h.net)) : d.daily.map(x => x.net);
+      chart($('#c-spark')).setOption({
+        grid: { left: 0, right: 0, top: 6, bottom: 0 }, animationDuration: 900,
+        xAxis: { type: 'category', show: false, boundaryGap: false, data: spark.map((_, i) => i) },
+        yAxis: { type: 'value', show: false, min: v => v.min - (v.max - v.min) * 0.15 },
+        series: [{ type: 'line', data: spark, smooth: 0.35, symbol: 'none', lineStyle: { width: 2.5, color: '#6e93ff' },
+          areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(110,147,255,.35)' }, { offset: 1, color: 'rgba(110,147,255,0)' }]) } }],
+      });
+    } },
+  approved: { label: 'Vendas aprovadas', size: 3,
+    html: (d, k, pk) => kpi('cart', 'blue', 'Vendas aprovadas', num(k.approved), `${delta(k.approved, pk.approved)}<span>Ticket médio ${brl(k.ticket)}</span>`) },
+  pending: { label: 'Vendas pendentes', size: 3,
+    html: (d, k) => kpi('clock', 'amber', 'Vendas pendentes', brl(k.pending_value), `<span>${num(k.pending)} pedidos aguardando pagamento</span>`) },
+  cpa: { label: 'CPA', size: 3,
+    html: (d, k, pk) => kpi('target', 'violet', 'CPA', brl(k.cpa), `${delta(k.cpa, pk.cpa, false)}<span>CPI ${brl(k.cpi)} em ${num(k.ic)} ICs</span>`, 'Gastos divididos pelas vendas aprovadas') },
+  refunds: { label: 'Reembolsos', size: 3,
+    html: (d, k) => kpi('undo', 'red', 'Reembolsos', brl(k.refunded_value), `<span>${num(k.refunded)} reembolsos e ${num(k.chargeback)} chargebacks (${pct(k.refund_rate)})</span>`) },
+  ministats: { label: 'Margem, bruto, impostos e Pixel', size: 12,
+    html: (d, k) => ministats([
+      ['Margem', `<span class="${cls(k.margin)}">${pct(k.margin)}</span>`], ['Faturamento bruto', brl(k.gross)], ['Impostos', brl(k.taxes)],
+      ['Compras no Pixel', num(k.meta_purchases), 'Compras contadas pelo Pixel da Meta, para comparar com as vendas reais']]) },
+  pay: { label: 'Vendas por pagamento', size: 4,
+    html: () => `<div class="card"><div class="card-h"><div class="card-t">Vendas por pagamento</div><span class="card-note">Taxa de aprovação</span></div><div class="pay" id="pay"></div></div>`,
+    draw: d => {
+      const PM = { pix: ['Pix', 'pix', 'green', '#2bd98a'], card: ['Cartão', 'card', 'blue', '#3b6cff'], boleto: ['Boleto', 'boleto', 'amber', '#ffb547'] };
+      $('#pay').innerHTML = Object.entries(PM).map(([key, [label, icon, tone, color]]) => {
+        const m = d.methods[key];
+        return `<div class="pay-item"><span class="ico ${tone}">${I[icon]}</span>
+          <div><div class="nm">${label}</div><div class="bar"><i style="width:${(m.rate * 100).toFixed(1)}%;background:${color}"></i></div>
+          <div class="det">${num(m.approved)} de ${num(m.total)} aprovadas</div></div>
+          <div><div class="rate">${pct(m.rate, 0)}</div><div class="det" style="text-align:right">${brl(m.net)}</div></div></div>`;
+      }).join('');
+    } },
+  funnel: { label: 'Funil de conversão', size: 8,
+    html: () => `<div class="card"><div class="card-h"><div class="card-t">Funil de conversão</div><span class="card-note">% em relação à etapa anterior</span></div><div id="funnel"></div></div>`,
+    draw: d => drawFunnel($('#funnel'), d.funnel) },
+  map: { label: 'Vendas por estado', size: 6,
+    html: () => `<div class="card"><div class="card-h"><div class="card-t">Vendas por estado</div><span class="card-note" id="topstates"></span></div><div class="chart tall" id="c-map"></div></div>`,
+    draw: d => ensureMap().then(() => {
+      const el = $('#c-map'); if (!el) return;
+      const data = Object.entries(d.states).map(([uf, v]) => ({ name: uf, value: v.count, net: v.net }));
+      const max = Math.max(1, ...data.map(x => x.value));
+      chart(el).setOption({
+        tooltip: { ...TT, trigger: 'item', formatter: p => `<b>${p.name}</b><br>${num(p.data ? p.data.value : 0)} vendas<br>${brl(p.data ? p.data.net : 0)}` },
+        visualMap: { min: 0, max, left: 4, bottom: 8, itemHeight: 100, itemWidth: 10, calculable: false, text: ['Mais', 'Menos'], textStyle: { color: '#8a9bc2', fontFamily: 'Manrope' },
+          inRange: { color: ['#18284d', '#3b6cff', '#8b5cf6', '#e44bb0'] } },
+        series: [{ type: 'map', map: 'BR', roam: false, data, layoutCenter: ['56%', '50%'], layoutSize: '105%',
+          itemStyle: { areaColor: '#121e3b', borderColor: '#0b1326', borderWidth: 1.2 },
+          emphasis: { label: { show: true, color: '#fff', fontWeight: 800, fontFamily: 'Manrope' }, itemStyle: { areaColor: '#6e93ff' } }, select: { disabled: true } }],
+      });
+      const top = [...data].sort((a, b) => b.value - a.value).slice(0, 3);
+      $('#topstates').textContent = top.length ? 'Mais vendas: ' + top.map(t => t.name).join(', ') : '';
+    }).catch(() => { const el = $('#c-map'); if (el) el.innerHTML = '<div class="empty">Mapa indisponível</div>'; }) },
+  hours: { label: 'Vendas por horário', size: 6,
+    html: () => `<div class="card"><div class="card-h"><div class="card-t">Vendas por horário</div><span class="card-note" id="peak"></span></div><div class="chart tall" id="c-hours"></div></div>`,
+    draw: d => {
+      const peak = d.hours.reduce((a, b) => (b.count > a.count ? b : a), d.hours[0]);
+      $('#peak').textContent = peak.count ? `Pico às ${String(peak.hour).padStart(2, '0')}h` : '';
+      chart($('#c-hours')).setOption({
+        grid: { left: 34, right: 6, top: 14, bottom: 26 },
+        tooltip: { ...TT, trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(110,147,255,.06)' } },
+          formatter: p => `<b>${p[0].axisValue}</b><br>${num(p[0].value)} vendas<br>${brl(d.hours[p[0].dataIndex].net)}` },
+        xAxis: { type: 'category', data: d.hours.map(h => String(h.hour).padStart(2, '0') + 'h'), ...AX, axisTick: { show: false }, splitLine: { show: false } },
+        yAxis: { type: 'value', minInterval: 1, ...AX, axisLine: { show: false } },
+        series: [{ type: 'bar', barWidth: '58%',
+          data: d.hours.map(h => ({ value: h.count, itemStyle: h.hour === peak.hour && peak.count ? { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#b48bff' }, { offset: 1, color: 'rgba(139,92,246,.25)' }]) } : undefined })),
+          itemStyle: { borderRadius: [6, 6, 2, 2], color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#6e93ff' }, { offset: 1, color: 'rgba(59,108,255,.18)' }]) } }],
+      });
+    } },
+  daily: { label: 'Faturamento, gastos e lucro por dia', size: 8,
+    html: () => `<div class="card"><div class="card-h"><div class="card-t">Faturamento, gastos e lucro por dia</div></div><div class="chart" id="c-daily"></div></div>`,
+    draw: d => chart($('#c-daily')).setOption({
+      grid: { left: 58, right: 12, top: 40, bottom: 26 },
+      legend: { textStyle: { color: '#8a9bc2', fontFamily: 'Manrope', fontWeight: 600 }, top: 0, left: 0, icon: 'roundRect', itemWidth: 12, itemHeight: 8 },
+      tooltip: { ...TT, trigger: 'axis', valueFormatter: v => brl(v) },
+      xAxis: { type: 'category', data: d.daily.map(x => x.day.slice(8) + '/' + x.day.slice(5, 7)), ...AX, axisTick: { show: false }, splitLine: { show: false } },
+      yAxis: { type: 'value', ...AX, axisLine: { show: false }, axisLabel: { color: '#8a9bc2', formatter: v => Math.abs(v) >= 1000 ? 'R$' + num(v / 1000, Math.abs(v) < 10000 ? 1 : 0) + 'k' : 'R$' + num(v) } },
+      series: [
+        { name: 'Líquido', type: 'bar', barMaxWidth: 44, data: d.daily.map(x => +x.net.toFixed(2)),
+          itemStyle: { borderRadius: [6, 6, 2, 2], color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#4f7cff' }, { offset: 1, color: 'rgba(59,108,255,.35)' }]) } },
+        { name: 'Gastos', type: 'line', smooth: true, data: d.daily.map(x => +x.spend.toFixed(2)), itemStyle: { color: '#ffb547' }, lineStyle: { width: 2.5 }, symbolSize: 6 },
+        { name: 'Lucro', type: 'line', smooth: true, data: d.daily.map(x => +x.profit.toFixed(2)), itemStyle: { color: '#2bd98a' }, lineStyle: { width: 2.5 }, symbolSize: 6 },
+      ],
+    }) },
+  products: { label: 'Produtos', size: 4,
+    html: d => {
+      const maxP = Math.max(1, ...d.products.map(p => p.net));
+      return `<div class="card"><div class="card-h"><div class="card-t">Produtos</div><span class="card-note">Por faturamento líquido</span></div><div class="prod">${d.products.length ? d.products.map((p, i) => `<div class="prod-row">
+        <div class="top"><span>${esc(p.product)}</span><span>${brl(p.net)}</span></div>
+        <div class="bar"><i style="width:${(p.net / maxP * 100).toFixed(1)}%;background:${['#3b6cff', '#8b5cf6', '#e44bb0', '#2bd98a', '#ffb547'][i % 5]}"></i></div>
+        <div class="sub">${num(p.count)} ${p.count === 1 ? 'venda' : 'vendas'}</div></div>`).join('')
+        : '<div class="empty">Nenhuma venda no período. As vendas chegam pelo webhook do checkout.</div>'}</div></div>`;
+    } },
+  // ---- blocos novos (fora do layout padrão) ----
+  traffic: { label: 'Tráfego da Meta (impressões, cliques, CPC, CTR, CPM)', size: 12,
+    html: d => ministats([['Impressões', num(d.meta.impressions)], ['Cliques no link', num(d.meta.clicks)], ['CPC', brl(d.meta.cpc)], ['CTR', `${num(d.meta.ctr, 2)}%`], ['CPM', brl(d.meta.cpm)]]) },
+  ticket: { label: 'Ticket médio', size: 3,
+    html: (d, k, pk) => kpi('cart', 'green', 'Ticket médio', brl(k.ticket), `${delta(k.ticket, pk.ticket)}<span>Bruto por venda aprovada</span>`) },
+  refundRate: { label: 'Taxa de reembolso', size: 3,
+    html: (d, k, pk) => kpi('undo', 'red', 'Taxa de reembolso', pct(k.refund_rate), `${delta(k.refund_rate, pk.refund_rate, false)}<span>${num(k.refunded + k.chargeback)} de ${num(k.approved + k.refunded + k.chargeback)} vendas pagas</span>`) },
+  cpi: { label: 'CPI (custo por checkout iniciado)', size: 3,
+    html: (d, k, pk) => kpi('target', 'violet', 'CPI', brl(k.cpi), `${delta(k.cpi, pk.cpi, false)}<span>${num(k.ic)} ICs</span>`, 'Gastos divididos pelos checkouts iniciados (ICs)') },
+  recent: { label: 'Últimas vendas', size: 6,
+    html: d => `<div class="card"><div class="card-h"><div class="card-t">Últimas vendas</div><a class="card-note" href="#/vendas">Ver todas</a></div><div class="recent">${d.recent.length
+      ? d.recent.map(s => `<div class="rc-row"><div class="rc-l"><div class="nm">${esc(s.product || '—')}</div><div class="sub">${fmtDateTime(s.created_at)} · ${PAY[s.payment_method] || '—'}${s.campaign ? ` · ${esc(utmLabel(s.campaign))}` : ''}</div></div><div class="rc-r"><b>${brl(s.net)}</b>${statusBadge(s.status)}</div></div>`).join('')
+      : '<div class="empty">Nenhuma venda no período.</div>'}</div></div>` },
+};
+const SIZES = [3, 4, 6, 8, 12];
+const SIZE_LABEL = { 3: '¼', 4: '⅓', 6: '½', 8: '⅔', 12: 'Inteiro' };
+const DEFAULT_LAYOUT = ['hero', 'approved', 'pending', 'cpa', 'refunds', 'ministats', 'pay', 'funnel', 'map', 'hours', 'daily', 'products'].map(id => ({ id, size: BLOCKS[id].size }));
+const D = { editing: false, work: null, data: null, prev: null }; // estado do Resumo
+const savedLayout = () => ((G.settings && G.settings.dashboard_layout) || DEFAULT_LAYOUT).filter(b => BLOCKS[b.id]);
 
-  <div class="grid g4 mt">
-    ${kpi('cart', 'blue', 'Vendas aprovadas', num(k.approved), `${delta(k.approved, pk.approved)}<span>Ticket médio ${brl(k.ticket)}</span>`)}
-    ${kpi('clock', 'amber', 'Vendas pendentes', brl(k.pending_value), `<span>${num(k.pending)} pedidos aguardando pagamento</span>`)}
-    ${kpi('target', 'violet', 'CPA', brl(k.cpa), `${delta(k.cpa, pk.cpa, false)}<span>CPI ${brl(k.cpi)} em ${num(k.ic)} ICs</span>`, 'Gastos divididos pelas vendas aprovadas')}
-    ${kpi('undo', 'red', 'Reembolsos', brl(k.refunded_value), `<span>${num(k.refunded)} reembolsos e ${num(k.chargeback)} chargebacks (${pct(k.refund_rate)})</span>`)}
-  </div>
+function drawDashboard(d, prev) {
+  D.data = d; D.prev = prev;
+  const k = d.kpis; const pk = prev ? prev.kpis : {};
+  const L = D.editing ? D.work : savedLayout();
+  disposeCharts();
+  $('#edit-dash').hidden = D.editing;
+  $('#dash').classList.toggle('editing', D.editing);
+  $('#dash').innerHTML = (D.editing ? `<div class="editbar">
+      <div><b>Editando o Resumo</b><span class="muted">Arraste pela alça para mudar a ordem</span></div>
+      <div class="eb-actions"><button class="btn sm" data-ed="add">${I.plus}Adicionar bloco</button><button class="btn sm ghost" data-ed="reset">Restaurar padrão</button>
+        <button class="btn sm ghost" data-ed="cancel">Cancelar</button><button class="btn sm primary" data-ed="save">Salvar</button></div></div>` : '')
+    + `<div class="dgrid">${L.map(b => `<div class="blk b${b.size}" data-id="${b.id}" data-size="${b.size}">${D.editing ? `<div class="blk-tools"><span class="blk-name">${esc(BLOCKS[b.id].label)}</span>
+        <button class="iconbtn handle" type="button" title="Arrastar (ou use as setas do teclado)" aria-label="Mover ${esc(BLOCKS[b.id].label)}">${I.grip}</button>
+        <button class="btn sm bsize" type="button" data-resize title="Mudar tamanho">${SIZE_LABEL[b.size]}</button>
+        <button class="iconbtn" type="button" data-rm title="Remover" aria-label="Remover ${esc(BLOCKS[b.id].label)}">${I.x}</button></div>` : ''}${BLOCKS[b.id].html(d, k, pk, prev)}</div>`).join('')
+      || '<div class="blk b12 empty">Nenhum bloco no painel. Use "Adicionar bloco".</div>'}</div>`;
+  for (const b of L) if (BLOCKS[b.id].draw) BLOCKS[b.id].draw(d, k);
+  if (D.editing) bindEditor();
+}
 
-  <div class="card ministats mt">
-    <div><span class="l">Margem</span><span class="v ${cls(k.margin)}">${pct(k.margin)}</span></div>
-    <div><span class="l">Faturamento bruto</span><span class="v">${brl(k.gross)}</span></div>
-    <div><span class="l">Impostos</span><span class="v">${brl(k.taxes)}</span></div>
-    <div><span class="l" title="Compras contadas pelo Pixel da Meta, para comparar com as vendas reais">Compras no Pixel</span><span class="v">${num(k.meta_purchases)}</span></div>
-  </div>
-
-  <div class="grid g3 mt">
-    <div class="card"><div class="card-h"><div class="card-t">Vendas por pagamento</div><span class="card-note">Taxa de aprovação</span></div><div class="pay" id="pay"></div></div>
-    <div class="card span2"><div class="card-h"><div class="card-t">Funil de conversão</div><span class="card-note">% em relação à etapa anterior</span></div><div id="funnel"></div></div>
-  </div>
-
-  <div class="grid g2 mt">
-    <div class="card"><div class="card-h"><div class="card-t">Vendas por estado</div><span class="card-note" id="topstates"></span></div><div class="chart tall" id="c-map"></div></div>
-    <div class="card"><div class="card-h"><div class="card-t">Vendas por horário</div><span class="card-note" id="peak"></span></div><div class="chart tall" id="c-hours"></div></div>
-  </div>
-
-  <div class="grid g3 mt">
-    <div class="card span2"><div class="card-h"><div class="card-t">Faturamento, gastos e lucro por dia</div></div><div class="chart" id="c-daily"></div></div>
-    <div class="card"><div class="card-h"><div class="card-t">Produtos</div><span class="card-note">Por faturamento líquido</span></div><div class="prod" id="prods"></div></div>
-  </div>`;
-
-  // sparkline do hero
-  const single = d.daily.length === 1;
-  let acc = 0;
-  const nowH = Number(new Date().toLocaleString('en-US', { timeZone: TZ, hour: 'numeric', hour12: false }));
-  const spark = single ? d.hours.filter(h => d.range.to !== todayStr() || h.hour <= nowH).map(h => (acc += h.net)) : d.daily.map(x => x.net);
-  chart($('#c-spark')).setOption({
-    grid: { left: 0, right: 0, top: 6, bottom: 0 }, animationDuration: 900,
-    xAxis: { type: 'category', show: false, boundaryGap: false, data: spark.map((_, i) => i) },
-    yAxis: { type: 'value', show: false, min: v => v.min - (v.max - v.min) * 0.15 },
-    series: [{ type: 'line', data: spark, smooth: 0.35, symbol: 'none', lineStyle: { width: 2.5, color: '#6e93ff' },
-      areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(110,147,255,.35)' }, { offset: 1, color: 'rgba(110,147,255,0)' }]) } }],
+// ---------- modo de edição ----------
+function startEdit() {
+  D.editing = true; D.work = savedLayout().map(b => ({ ...b }));
+  drawDashboard(D.data, D.prev);
+}
+function bindEditor() {
+  const grid = $('#dash .dgrid');
+  const sync = () => { D.work = $$('.blk[data-id]', grid).map(el => ({ id: el.dataset.id, size: Number(el.dataset.size) })); charts.forEach(c => c.resize()); };
+  const redraw = () => drawDashboard(D.data, D.prev);
+  const actions = {
+    add: addBlockModal,
+    reset: () => { D.work = DEFAULT_LAYOUT.map(b => ({ ...b })); redraw(); },
+    cancel: () => { D.editing = false; redraw(); },
+    save: saveLayout,
+  };
+  $$('[data-ed]').forEach(b => b.onclick = () => actions[b.dataset.ed]());
+  $$('[data-rm]', grid).forEach(b => b.onclick = () => { b.closest('.blk').remove(); sync(); });
+  $$('[data-resize]', grid).forEach(btn => btn.onclick = () => {
+    const el = btn.closest('.blk'); const cur = Number(el.dataset.size);
+    const next = SIZES[(SIZES.indexOf(cur) + 1) % SIZES.length];
+    el.classList.replace('b' + cur, 'b' + next); el.dataset.size = next; btn.textContent = SIZE_LABEL[next];
+    sync();
   });
-
-  // pagamentos
-  const PM = { pix: ['Pix', 'pix', 'green', '#2bd98a'], card: ['Cartão', 'card', 'blue', '#3b6cff'], boleto: ['Boleto', 'boleto', 'amber', '#ffb547'] };
-  $('#pay').innerHTML = Object.entries(PM).map(([key, [label, icon, tone, color]]) => {
-    const m = d.methods[key];
-    return `<div class="pay-item"><span class="ico ${tone}">${I[icon]}</span>
-      <div><div class="nm">${label}</div><div class="bar"><i style="width:${(m.rate * 100).toFixed(1)}%;background:${color}"></i></div>
-      <div class="det">${num(m.approved)} de ${num(m.total)} aprovadas</div></div>
-      <div><div class="rate">${pct(m.rate, 0)}</div><div class="det" style="text-align:right">${brl(m.net)}</div></div></div>`;
-  }).join('');
-
-  drawFunnel($('#funnel'), d.funnel);
-
-  // mapa
-  ensureMap().then(() => {
-    const el = $('#c-map'); if (!el) return;
-    const data = Object.entries(d.states).map(([uf, v]) => ({ name: uf, value: v.count, net: v.net }));
-    const max = Math.max(1, ...data.map(x => x.value));
-    chart(el).setOption({
-      tooltip: { ...TT, trigger: 'item', formatter: p => `<b>${p.name}</b><br>${num(p.data ? p.data.value : 0)} vendas<br>${brl(p.data ? p.data.net : 0)}` },
-      visualMap: { min: 0, max, left: 4, bottom: 8, itemHeight: 100, itemWidth: 10, calculable: false, text: ['Mais', 'Menos'], textStyle: { color: '#8a9bc2', fontFamily: 'Manrope' },
-        inRange: { color: ['#18284d', '#3b6cff', '#8b5cf6', '#e44bb0'] } },
-      series: [{ type: 'map', map: 'BR', roam: false, data, layoutCenter: ['56%', '50%'], layoutSize: '105%',
-        itemStyle: { areaColor: '#121e3b', borderColor: '#0b1326', borderWidth: 1.2 },
-        emphasis: { label: { show: true, color: '#fff', fontWeight: 800, fontFamily: 'Manrope' }, itemStyle: { areaColor: '#6e93ff' } }, select: { disabled: true } }],
-    });
-    const top = [...data].sort((a, b) => b.value - a.value).slice(0, 3);
-    $('#topstates').textContent = top.length ? 'Mais vendas: ' + top.map(t => t.name).join(', ') : '';
-  }).catch(() => { $('#c-map').innerHTML = '<div class="empty">Mapa indisponível</div>'; });
-
-  // horas
-  const peak = d.hours.reduce((a, b) => (b.count > a.count ? b : a), d.hours[0]);
-  $('#peak').textContent = peak.count ? `Pico às ${String(peak.hour).padStart(2, '0')}h` : '';
-  chart($('#c-hours')).setOption({
-    grid: { left: 34, right: 6, top: 14, bottom: 26 },
-    tooltip: { ...TT, trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(110,147,255,.06)' } },
-      formatter: p => `<b>${p[0].axisValue}</b><br>${num(p[0].value)} vendas<br>${brl(d.hours[p[0].dataIndex].net)}` },
-    xAxis: { type: 'category', data: d.hours.map(h => String(h.hour).padStart(2, '0') + 'h'), ...AX, axisTick: { show: false }, splitLine: { show: false } },
-    yAxis: { type: 'value', minInterval: 1, ...AX, axisLine: { show: false } },
-    series: [{ type: 'bar', barWidth: '58%',
-      data: d.hours.map(h => ({ value: h.count, itemStyle: h.hour === peak.hour && peak.count ? { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#b48bff' }, { offset: 1, color: 'rgba(139,92,246,.25)' }]) } : undefined })),
-      itemStyle: { borderRadius: [6, 6, 2, 2], color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#6e93ff' }, { offset: 1, color: 'rgba(59,108,255,.18)' }]) } }],
+  $$('.handle', grid).forEach(h => {
+    h.onkeydown = e => {
+      const el = h.closest('.blk');
+      if (['ArrowUp', 'ArrowLeft'].includes(e.key)) { if (el.previousElementSibling) el.previousElementSibling.before(el); }
+      else if (['ArrowDown', 'ArrowRight'].includes(e.key)) { if (el.nextElementSibling) el.nextElementSibling.after(el); }
+      else return;
+      e.preventDefault(); h.focus(); sync();
+    };
+    h.onpointerdown = e => dragBlock(e, h.closest('.blk'), grid, sync);
   });
-
-  // diário
-  chart($('#c-daily')).setOption({
-    grid: { left: 58, right: 12, top: 40, bottom: 26 },
-    legend: { textStyle: { color: '#8a9bc2', fontFamily: 'Manrope', fontWeight: 600 }, top: 0, left: 0, icon: 'roundRect', itemWidth: 12, itemHeight: 8 },
-    tooltip: { ...TT, trigger: 'axis', valueFormatter: v => brl(v) },
-    xAxis: { type: 'category', data: d.daily.map(x => x.day.slice(8) + '/' + x.day.slice(5, 7)), ...AX, axisTick: { show: false }, splitLine: { show: false } },
-    yAxis: { type: 'value', ...AX, axisLine: { show: false }, axisLabel: { color: '#8a9bc2', formatter: v => Math.abs(v) >= 1000 ? 'R$' + num(v / 1000, Math.abs(v) < 10000 ? 1 : 0) + 'k' : 'R$' + num(v) } },
-    series: [
-      { name: 'Líquido', type: 'bar', barMaxWidth: 44, data: d.daily.map(x => +x.net.toFixed(2)),
-        itemStyle: { borderRadius: [6, 6, 2, 2], color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: '#4f7cff' }, { offset: 1, color: 'rgba(59,108,255,.35)' }]) } },
-      { name: 'Gastos', type: 'line', smooth: true, data: d.daily.map(x => +x.spend.toFixed(2)), itemStyle: { color: '#ffb547' }, lineStyle: { width: 2.5 }, symbolSize: 6 },
-      { name: 'Lucro', type: 'line', smooth: true, data: d.daily.map(x => +x.profit.toFixed(2)), itemStyle: { color: '#2bd98a' }, lineStyle: { width: 2.5 }, symbolSize: 6 },
-    ],
+}
+// arrastar com dedo ou mouse: troca de lugar ao passar por cima de outro bloco; rola a página perto das bordas
+function dragBlock(e, el, grid, done) {
+  e.preventDefault();
+  el.classList.add('dragging');
+  let x = e.clientX, y = e.clientY, last = null;
+  const hit = () => {
+    const over = (document.elementFromPoint(x, y) || document.body).closest('.blk[data-id]');
+    if (!over || over === el || over.parentNode !== grid) { last = null; return; }
+    if (over === last) return; // evita ficar trocando de lugar sem parar
+    last = over;
+    over[el.compareDocumentPosition(over) & Node.DOCUMENT_POSITION_FOLLOWING ? 'after' : 'before'](el);
+  };
+  const move = ev => { x = ev.clientX; y = ev.clientY; hit(); };
+  const scroller = setInterval(() => {
+    const dy = y < 90 ? -14 : y > innerHeight - 110 ? 14 : 0;
+    if (dy) { scrollBy(0, dy); hit(); }
+  }, 16);
+  const end = () => {
+    clearInterval(scroller); el.classList.remove('dragging');
+    removeEventListener('pointermove', move); removeEventListener('pointerup', end); removeEventListener('pointercancel', end);
+    done();
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', end); addEventListener('pointercancel', end);
+}
+function addBlockModal() {
+  const used = new Set(D.work.map(b => b.id));
+  const free = Object.keys(BLOCKS).filter(id => !used.has(id));
+  const isNew = id => !DEFAULT_LAYOUT.some(b => b.id === id);
+  modal({
+    title: 'Adicionar bloco', confirm: 'Adicionar',
+    body: free.length ? `<div class="list-check">${free.map(id => `<label><input type="checkbox" value="${id}">${esc(BLOCKS[id].label)}${isNew(id) ? ' <span class="badge blue">novo</span>' : ''}</label>`).join('')}</div>`
+      : '<p class="muted">Todos os blocos já estão no painel.</p>',
+    onConfirm: bg => {
+      const ids = $$('input:checked', bg).map(i => i.value);
+      if (!ids.length) return;
+      D.work.push(...ids.map(id => ({ id, size: BLOCKS[id].size })));
+      drawDashboard(D.data, D.prev);
+      $(`.blk[data-id="${ids[0]}"]`).scrollIntoView({ behavior: 'smooth', block: 'center' });
+    },
   });
-
-  const maxP = Math.max(1, ...d.products.map(p => p.net));
-  $('#prods').innerHTML = d.products.length ? d.products.map((p, i) => `<div class="prod-row">
-      <div class="top"><span>${esc(p.product)}</span><span>${brl(p.net)}</span></div>
-      <div class="bar"><i style="width:${(p.net / maxP * 100).toFixed(1)}%;background:${['#3b6cff', '#8b5cf6', '#e44bb0', '#2bd98a', '#ffb547'][i % 5]}"></i></div>
-      <div class="sub">${num(p.count)} ${p.count === 1 ? 'venda' : 'vendas'}</div></div>`).join('')
-    : '<div class="empty">Nenhuma venda no período. As vendas chegam pelo webhook do checkout.</div>';
+}
+async function saveLayout() {
+  const isDefault = JSON.stringify(D.work) === JSON.stringify(DEFAULT_LAYOUT);
+  try {
+    await api('/api/settings/layout', { method: 'PUT', body: { layout: isDefault ? null : D.work } });
+    G.settings.dashboard_layout = isDefault ? null : D.work;
+    D.editing = false; drawDashboard(D.data, D.prev); toast('Painel salvo');
+  } catch (e) { toast(e.message, 'err'); }
 }
 
 function drawFunnel(el, stages) {

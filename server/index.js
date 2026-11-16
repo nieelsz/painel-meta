@@ -168,7 +168,15 @@ app.post('/api/operations', (req, res) => {
 app.delete('/api/operations/:id', (req, res) => { db.prepare('DELETE FROM operations WHERE id=?').run(req.params.id); res.json({ ok: true }); });
 app.get('/api/products', (req, res) => res.json(db.prepare('SELECT DISTINCT product FROM sales WHERE product IS NOT NULL ORDER BY product').all().map(r => r.product)));
 
-app.get('/api/settings', (req, res) => res.json({ tax_pct: taxPct() }));
+app.get('/api/settings', (req, res) => res.json({ tax_pct: taxPct(), dashboard_layout: getSetting('dashboard_layout', null) }));
+// layout do Resumo: [{ id, size }] na ordem de exibição; null = padrão
+app.put('/api/settings/layout', (req, res) => {
+  const l = req.body.layout;
+  if (l === null) { setSetting('dashboard_layout', null); return res.json({ ok: true }); }
+  const ok = Array.isArray(l) && l.length <= 40 && l.every(b => b && /^[a-zA-Z]{1,30}$/.test(b.id) && [3, 4, 6, 8, 12].includes(b.size));
+  if (!ok) return res.status(400).json({ error: 'Layout inválido' });
+  setSetting('dashboard_layout', l.map(b => ({ id: b.id, size: b.size }))); res.json({ ok: true });
+});
 app.put('/api/settings', (req, res) => {
   const v = Number(req.body.tax_pct);
   if (isNaN(v) || v < 0 || v > 100) return res.status(400).json({ error: 'Imposto inválido' });
@@ -267,6 +275,7 @@ app.get('/api/dashboard', wrap(async (req, res) => {
     ],
     methods, hours, states, daily,
     products: Object.values(prodMap).sort((a, b) => b.net - a.net).slice(0, 8),
+    recent: list.slice(0, 8).map(s => ({ created_at: s.created_at, product: s.product, status: s.status, payment_method: s.payment_method, gross: s.gross_cents / 100, net: s.net_cents / 100, campaign: s.utm_campaign })),
     meta: { impressions: mt.impressions, clicks: mt.clicks, cpc: mt.clicks ? spend / mt.clicks : 0, ctr: mt.impressions ? mt.clicks / mt.impressions * 100 : 0, cpm: mt.impressions ? spend / mt.impressions * 1000 : 0 },
   });
 }));
