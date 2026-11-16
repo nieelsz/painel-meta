@@ -36,7 +36,24 @@ function insertSale(s) {
 }
 
 // ---------- normalizadores ----------
-const cents = v => Math.round(Number(String(v ?? 0).replace(',', '.')) * 100) || 0;
+// aceita 97, "97.00", "97,00", "1.234,56", "1,234.56" e "R$ 97,00"
+function cents(v) {
+  let s = String(v ?? 0).replace(/[^\d.,-]/g, '');
+  s = s.lastIndexOf(',') > s.lastIndexOf('.') ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+  return Math.round(Number(s) * 100) || 0;
+}
+// data do checkout → ISO; sem fuso = horário de Brasília; inválida = undefined (a venda usa a hora atual)
+function toIso(v) {
+  if (v == null || v === '') return undefined;
+  let d;
+  if (typeof v === 'number' || /^\d+$/.test(v)) { const n = Number(v); d = new Date(n < 1e12 ? n * 1000 : n); }
+  else {
+    let s = String(v).trim().replace(' ', 'T');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) s += 'T00:00:00';
+    d = new Date(/T.*(Z|[+-]\d{2}:?\d{2})$/i.test(s) ? s : s + '-03:00'); // checkouts brasileiros mandam hora de Brasília
+  }
+  return isNaN(d) ? undefined : d.toISOString();
+}
 function method(v) {
   v = String(v || '').toLowerCase();
   if (v.includes('pix')) return 'pix';
@@ -48,6 +65,8 @@ function status(v) {
   v = String(v || '').toLowerCase();
   if (/charge/.test(v)) return 'chargeback';
   if (/refund|reembol|estorn/.test(v)) return 'refunded';
+  // antes do "aprovado": "unpaid", "não pago" e "incomplete" contêm "paid", "pago" e "complete"
+  if (/(unpaid|not.?paid|n[aã]o.?pago|incomplet|waiting|aguard|pending|pendente)/.test(v)) return 'pending';
   if (/(paid|approved|aprovad|complete|pago|confirm)/.test(v)) return 'approved';
   if (/(refus|recus|declin|cancel|expired|expir)/.test(v)) return 'canceled';
   return 'pending';
@@ -61,7 +80,7 @@ const normalizers = {
       product: b.product || b.product_name, gross_cents: cents(b.amount), net_cents: cents(b.net_amount ?? b.amount),
       customer_state: b.state || b.customer_state,
       utm_source: b.utm_source, utm_medium: b.utm_medium, utm_campaign: b.utm_campaign, utm_content: b.utm_content, utm_term: b.utm_term,
-      created_at: b.created_at,
+      created_at: toIso(b.created_at),
     };
   },
   kiwify(b) {
@@ -74,7 +93,7 @@ const normalizers = {
       net_cents: Number(c.my_commission || c.charge_amount || 0),
       customer_state: b.Customer && b.Customer.state,
       utm_source: t.utm_source, utm_medium: t.utm_medium, utm_campaign: t.utm_campaign, utm_content: t.utm_content, utm_term: t.utm_term,
-      created_at: b.created_at ? new Date(b.created_at.replace(' ', 'T') + (b.created_at.includes('Z') ? '' : '-03:00')).toISOString() : undefined,
+      created_at: toIso(b.created_at),
     };
   },
   hotmart(b) {
@@ -86,7 +105,7 @@ const normalizers = {
       gross_cents: cents(p.price && p.price.value), net_cents: cents(prod ? prod.value : p.price && p.price.value),
       customer_state: d.buyer && d.buyer.address && d.buyer.address.state,
       utm_source: o.src, utm_campaign: o.sck, utm_content: o.xcod,
-      created_at: p.order_date ? new Date(p.order_date).toISOString() : undefined,
+      created_at: toIso(p.order_date),
     };
   },
 };
@@ -126,4 +145,4 @@ function idsInUtm(s) {
   return ids;
 }
 
-module.exports = { insertSale, webhookRoute, salesQuery, idsInUtm, localParts };
+module.exports = { insertSale, webhookRoute, salesQuery, idsInUtm, localParts, status, cents, toIso };
