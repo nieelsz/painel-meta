@@ -41,6 +41,8 @@ npm test               # testes dos webhooks (status, valores, datas)
 - Dashboard: líquido = soma `net_cents` das aprovadas; lucro = líquido − gastos − impostos (`tax_pct` em settings); ROAS = líquido ÷ gastos; ROI = lucro ÷ gastos.
 - Funil: Cliques (inline_link_clicks) → Vis. Página (landing_page_view) → ICs (initiate_checkout) vêm da Meta; Vendas Inic. = todos os pedidos; Vendas Apr. = aprovados.
 - Operação = grupo de contas + produtos, usada como filtro no Resumo.
+- Resumo em blocos: cada bloco está em `BLOCKS` (public/app.js) com `html()` e, se tiver gráfico, `draw()`. O layout (ordem e tamanho, em colunas de 12) fica em `settings.dashboard_layout` (null = padrão), igual no PC e no celular. Bloco novo: acrescente em `BLOCKS` e ele aparece em "Adicionar bloco".
+- Celular (até 820px): barra de abas embaixo, filtros recolhíveis (`filterToggle()`), tabelas com `.table-wrap.cards` viram cartões usando `data-l` nas células. Teste telas novas em 375, 390 e 430px.
 - Toda alteração em anúncio (status, orçamento, duplicar) é registrada em `action_log`.
 - Datas do dashboard usam o fuso `TZ_PAINEL` (padrão America/Sao_Paulo); cada venda guarda `day` e `hour` locais.
 

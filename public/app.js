@@ -126,7 +126,8 @@ const ROUTES = {
 async function route() {
   const key = (location.hash.replace('#/', '') || 'resumo').split('?')[0];
   const r = ROUTES[key] || ROUTES.resumo;
-  $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.r === key));
+  $$('a[data-r]').forEach(a => a.classList.toggle('active', a.dataset.r === key));
+  $('#more').classList.toggle('active', ['operacoes', 'integracoes', 'config'].includes(key));
   $('#title').textContent = r.title; $('#subtitle').textContent = '';
   disposeCharts(); clearInterval(timer); lastUpdate = null;
   current = await r.render();
@@ -137,7 +138,17 @@ setInterval(() => {
   $('#updated').textContent = lastUpdate ? `Atualizado há ${Math.round((Date.now() - lastUpdate) / 1000)}s` : '';
 }, 1000);
 $('#refresh').onclick = () => current && current();
-$('#logout').onclick = async e => { e.preventDefault(); await api('/api/logout', { method: 'POST' }); location.href = '/login.html'; };
+async function logout(e) { e.preventDefault(); await api('/api/logout', { method: 'POST' }); location.href = '/login.html'; }
+$('#logout').onclick = logout;
+// celular: "Mais" abre as telas de configuração numa gaveta
+function openMore() {
+  const bg = document.createElement('div');
+  bg.className = 'modal-bg';
+  bg.innerHTML = `<div class="modal sheet"><nav class="nav">${['operacoes', 'integracoes', 'config'].map(r => $(`#nav a[data-r="${r}"]`).outerHTML).join('')}<a href="#" data-logout>${$('#logout').innerHTML}</a></nav></div>`;
+  bg.onclick = e => { if (e.target === bg || e.target.closest('a')) bg.remove(); };
+  $('[data-logout]', bg).onclick = logout;
+  document.body.appendChild(bg);
+}
 window.addEventListener('hashchange', route);
 
 // =================================================================
@@ -185,7 +196,7 @@ async function renderDashboard() {
     <label class="field">Operação<select class="input" id="f-op"><option value="">Todas</option>${G.operations.map(o => `<option value="${o.id}" ${String(S.operation) === String(o.id) ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
     <label class="field">Conta de anúncio<select class="input" id="f-acc">${accountOptions(S.account)}</select></label>
     <label class="field">Produto<select class="input" id="f-prod"><option value="">Todos</option>${G.products.map(p => `<option ${S.product === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
-    <button class="btn edit-dash" id="edit-dash" type="button">${I.edit}Editar painel</button>
+    <button class="btn edit-dash" id="edit-dash" type="button">${I.edit}<span class="hide-m">Editar painel</span><span class="only-m">Editar</span></button>
   </div>
   <div id="warn"></div>
   <div id="dash"></div>`;
@@ -433,7 +444,8 @@ function dragBlock(e, el, grid, done) {
   el.classList.add('dragging');
   let x = e.clientX, y = e.clientY, last = null;
   const hit = () => {
-    const over = (document.elementFromPoint(x, y) || document.body).closest('.blk[data-id]');
+    // elementsFromPoint enxerga por baixo do topo fixo e da barra de edição
+    const over = document.elementsFromPoint(x, y).map(n => n.closest('.blk[data-id]')).find(Boolean);
     if (!over || over === el || over.parentNode !== grid) { last = null; return; }
     if (over === last) return; // evita ficar trocando de lugar sem parar
     last = over;
@@ -441,7 +453,8 @@ function dragBlock(e, el, grid, done) {
   };
   const move = ev => { x = ev.clientX; y = ev.clientY; hit(); };
   const scroller = setInterval(() => {
-    const dy = y < 90 ? -14 : y > innerHeight - 110 ? 14 : 0;
+    const top = ($('.editbar') || document.body).getBoundingClientRect().bottom;
+    const dy = y < Math.max(top, 0) + 60 ? -14 : y > innerHeight - 110 ? 14 : 0;
     if (dy) { scrollBy(0, dy); hit(); }
   }, 16);
   const end = () => {
@@ -519,6 +532,7 @@ async function renderMeta() {
     <button data-t="accounts">Contas</button><button data-t="campaign">Campanhas</button><button data-t="adset">Conjuntos</button><button data-t="ad">Anúncios</button>
   </div>
   <div class="filters">
+    ${filterToggle()}
     ${periodFields()}
     <label class="field">Conta de anúncio<select class="input" id="m-acc">${accountOptions(M.account, 'Todas as contas')}</select></label>
     <label class="field grow">Buscar<input class="input" id="m-q" placeholder="Nome contém..." value="${esc(M.q)}"></label>
@@ -608,17 +622,17 @@ function drawTable() {
 
   $('#mbody').innerHTML = `${crumbs}
   ${M.errors && M.errors.length ? `<div class="alert">${esc(M.errors.join('; '))}</div>` : ''}
-  <div class="table-wrap"><table class="t">
+  <div class="table-wrap cards"><table class="t">
     <thead><tr><th style="width:50px">Status</th><th data-sort="name">${LEVEL_LABEL[M.tab].slice(0, -1)}${arrow('name')}</th>
       ${M.tab !== 'ad' ? '<th>Orçamento</th>' : ''}
       ${COLS.map(c => `<th class="num" data-sort="${c.key}">${c.label}${arrow(c.key)}</th>`).join('')}<th></th></tr></thead>
     <tbody>${rows.length ? rows.map(r => rowHtml(r, showAcc)).join('') : `<tr><td colspan="20" class="empty">Nada encontrado</td></tr>`}</tbody>
-    <tfoot><tr><td></td><td>Total (${rows.length})</td>${M.tab !== 'ad' ? '<td></td>' : ''}
-      <td class="num">${brl(tot.spend)}</td><td class="num">${num(tot.approved)}</td><td class="num">${brl(tot.net)}</td>
-      <td class="num ${cls(tot.profit)}">${brl(tot.profit)}</td><td class="num">${tot.spend ? num(tot.net / tot.spend, 2) : '—'}</td>
-      <td class="num">${tot.approved ? brl(tot.spend / tot.approved) : '—'}</td><td class="num">${num(tot.ic)}</td><td class="num">${tot.ic ? brl(tot.spend / tot.ic) : '—'}</td>
-      <td class="num">${tot.clicks ? brl(tot.spend / tot.clicks) : '—'}</td><td class="num">${tot.imp ? num(tot.clicks / tot.imp * 100, 2) + '%' : '—'}</td>
-      <td class="num">${tot.imp ? brl(tot.spend / tot.imp * 1000) : '—'}</td><td></td></tr></tfoot>
+    <tfoot><tr><td></td><td class="c-name">Total (${rows.length})</td>${M.tab !== 'ad' ? '<td></td>' : ''}
+      <td class="num" data-l="Gastos">${brl(tot.spend)}</td><td class="num" data-l="Vendas">${num(tot.approved)}</td><td class="num" data-l="Faturamento">${brl(tot.net)}</td>
+      <td class="num ${cls(tot.profit)}" data-l="Lucro">${brl(tot.profit)}</td><td class="num" data-l="ROAS">${tot.spend ? num(tot.net / tot.spend, 2) : '—'}</td>
+      <td class="num" data-l="CPA">${tot.approved ? brl(tot.spend / tot.approved) : '—'}</td><td class="num" data-l="ICs">${num(tot.ic)}</td><td class="num" data-l="CPI">${tot.ic ? brl(tot.spend / tot.ic) : '—'}</td>
+      <td class="num" data-l="CPC">${tot.clicks ? brl(tot.spend / tot.clicks) : '—'}</td><td class="num" data-l="CTR">${tot.imp ? num(tot.clicks / tot.imp * 100, 2) + '%' : '—'}</td>
+      <td class="num" data-l="CPM">${tot.imp ? brl(tot.spend / tot.imp * 1000) : '—'}</td><td></td></tr></tfoot>
   </table></div>`;
 
   $$('[data-sort]').forEach(th => th.onclick = () => { const k = th.dataset.sort; M.sort = { key: k, dir: M.sort.key === k ? -M.sort.dir : -1 }; drawTable(); });
@@ -663,12 +677,12 @@ function rowHtml(r, showAcc) {
     : r.lifetime_budget ? `${brl(r.lifetime_budget / 100)} <span class="sub">total</span>`
     : `<span class="sub">${r.level === 'campaign' ? 'No conjunto (ABO)' : 'Na campanha (CBO)'}</span>`;
   return `<tr class="${r.effective_status === 'ACTIVE' ? '' : 'off'}">
-    <td><label class="switch"><input type="checkbox" data-toggle="${r.id}" ${r.status === 'ACTIVE' ? 'checked' : ''}><span></span></label></td>
-    <td class="name">${r.level !== 'ad' ? `<a href="#" data-drill="${r.id}" title="${esc(r.name)}">${esc(r.name)}</a>` : `<span title="${esc(r.name)}">${esc(r.name)}</span>`}
+    <td class="c-sw"><label class="switch"><input type="checkbox" data-toggle="${r.id}" ${r.status === 'ACTIVE' ? 'checked' : ''}><span></span></label></td>
+    <td class="name c-name">${r.level !== 'ad' ? `<a href="#" data-drill="${r.id}" title="${esc(r.name)}">${esc(r.name)}</a>` : `<span title="${esc(r.name)}">${esc(r.name)}</span>`}
       <div class="sub">${r.effective_status !== 'ACTIVE' || r.status !== 'ACTIVE' ? `<span class="badge ${eff[1]}">${eff[0]}</span>` : ''}${showAcc ? `<span>${esc(r.account_name)}</span>` : ''}<span>${esc(r.id)}</span></div></td>
-    ${r.level !== 'ad' ? `<td>${budget}</td>` : ''}
-    ${COLS.map(c => `<td class="num">${c.fmt(c.get(r), r)}</td>`).join('')}
-    <td><button class="iconbtn" data-dup="${r.id}" title="Duplicar" aria-label="Duplicar">${I.copy}</button></td>
+    ${r.level !== 'ad' ? `<td class="c-full" data-l="Orçamento">${budget}</td>` : ''}
+    ${COLS.map(c => `<td class="num" data-l="${c.label}">${c.fmt(c.get(r), r)}</td>`).join('')}
+    <td class="c-act"><button class="iconbtn" data-dup="${r.id}" title="Duplicar" aria-label="Duplicar">${I.copy}</button></td>
   </tr>`;
 }
 
@@ -715,7 +729,7 @@ const STATUS = { approved: ['Aprovada', 'green'], pending: ['Pendente', 'yellow'
 const PAY = { pix: 'Pix', card: 'Cartão', boleto: 'Boleto', other: 'Outro' };
 async function renderSales() {
   let st = '', q = '';
-  view.innerHTML = `<div class="filters">${periodFields()}
+  view.innerHTML = `<div class="filters">${filterToggle()}${periodFields()}
     <label class="field">Status<select class="input" id="s-st"><option value="">Todos</option>${Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select></label>
     <label class="field">Produto<select class="input" id="s-prod"><option value="">Todos</option>${G.products.map(p => `<option>${esc(p)}</option>`).join('')}</select></label>
     <label class="field grow">Buscar<input class="input" id="s-q" placeholder="Pedido, produto, campanha..."></label></div><div id="sbody"></div>`;
@@ -728,12 +742,12 @@ async function renderSales() {
     const { from, to } = periodRange();
     const r = await api('/api/sales?' + new URLSearchParams({ from, to, status: st, q, product: $('#s-prod').value }));
     $('#sbody').innerHTML = `<p class="muted">${num(r.total)} vendas${r.total > 500 ? ' (mostrando 500)' : ''}</p>
-    <div class="table-wrap"><table class="t"><thead><tr><th>Data</th><th>Pedido</th><th>Produto</th><th>Status</th><th>Pagamento</th><th class="num">Bruto</th><th class="num">Líquido</th><th>UF</th><th>Campanha</th><th>Anúncio</th></tr></thead>
-    <tbody>${r.rows.map(s => `<tr><td>${new Date(s.created_at).toLocaleString('pt-BR', { timeZone: TZ, dateStyle: 'short', timeStyle: 'short' })}</td>
-      <td>${esc(s.order_id)}<div class="sub">${esc(s.platform)}</div></td><td>${esc(s.product)}</td>
-      <td><span class="badge ${(STATUS[s.status] || ['', ''])[1]}">${(STATUS[s.status] || [s.status])[0]}</span></td><td>${PAY[s.payment_method] || '—'}</td>
-      <td class="num">${brl(s.gross_cents / 100)}</td><td class="num">${brl(s.net_cents / 100)}</td><td>${esc(s.customer_state || '—')}</td>
-      <td class="name" title="${esc(s.utm_campaign)}">${esc(utmName(s.utm_campaign)) || '<span class="muted">sem UTM</span>'}</td><td class="name">${esc(utmName(s.utm_content))}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Nenhuma venda</td></tr>'}</tbody></table></div>`;
+    <div class="table-wrap cards"><table class="t"><thead><tr><th>Data</th><th>Pedido</th><th>Produto</th><th>Status</th><th>Pagamento</th><th class="num">Bruto</th><th class="num">Líquido</th><th>UF</th><th>Campanha</th><th>Anúncio</th></tr></thead>
+    <tbody>${r.rows.map(s => `<tr><td data-l="Data">${new Date(s.created_at).toLocaleString('pt-BR', { timeZone: TZ, dateStyle: 'short', timeStyle: 'short' })}</td>
+      <td class="c-last" data-l="Pedido">${esc(s.order_id)}<div class="sub">${esc(s.platform)}</div></td><td class="c-name">${esc(s.product)}</td>
+      <td data-l="Status"><span class="badge ${(STATUS[s.status] || ['', ''])[1]}">${(STATUS[s.status] || [s.status])[0]}</span></td><td data-l="Pagamento">${PAY[s.payment_method] || '—'}</td>
+      <td class="num" data-l="Bruto">${brl(s.gross_cents / 100)}</td><td class="num" data-l="Líquido">${brl(s.net_cents / 100)}</td><td data-l="UF">${esc(s.customer_state || '—')}</td>
+      <td class="name c-last" data-l="Campanha" title="${esc(s.utm_campaign)}">${esc(utmName(s.utm_campaign)) || '<span class="muted">sem UTM</span>'}</td><td class="name c-last" data-l="Anúncio">${esc(utmName(s.utm_content))}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Nenhuma venda</td></tr>'}</tbody></table></div>`;
     markUpdated();
   }
   await load();
@@ -848,4 +862,7 @@ async function renderConfig() {
 }
 
 // ---------- start ----------
+$('#tabbar').innerHTML = ['resumo', 'meta', 'vendas'].map(r => $(`#nav a[data-r="${r}"]`).outerHTML).join('')
+  + `<button type="button" id="more">${svg('<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>')}Mais</button>`;
+$('#more').onclick = openMore;
 loadGlobals().then(route).catch(e => toast(e.message, 'err'));
