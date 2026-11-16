@@ -1,4 +1,4 @@
-# Painel de Anúncios — contexto para o Claude Code
+# Track+ (painel de anúncios) — contexto para o Claude Code
 
 Painel web para gerenciar **várias contas de anúncio da Meta** (vários Business Managers) e acompanhar vendas, no estilo da Utmify (que só aceita uma conta). Uso pessoal do dono, protegido por senha, roda local e depois numa VPS.
 

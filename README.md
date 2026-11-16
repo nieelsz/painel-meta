@@ -1,4 +1,4 @@
-# Painel de Anúncios (multi-contas Meta)
+# Track+ — painel de anúncios (multi-contas Meta)
 
 Dashboard de vendas e gestão de anúncios do Facebook/Meta no estilo da Utmify, porém com **várias contas de anúncio e vários Business Managers** ao mesmo tempo.
 

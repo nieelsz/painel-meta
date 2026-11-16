@@ -18,7 +18,7 @@ app.use(express.urlencoded({ extended: true }));
 auth.routes(app);
 sales.webhookRoute(app);
 const pub = path.join(__dirname, '..', 'public');
-['/login.html', '/style.css', '/favicon.svg', '/vendor/manrope.woff2'].forEach(f => app.get(f, (req, res) => res.sendFile(path.join(pub, f))));
+['/login.html', '/style.css', '/favicon.svg', '/apple-touch-icon.png', '/vendor/manrope.woff2'].forEach(f => app.get(f, (req, res) => res.sendFile(path.join(pub, f))));
 
 // ---------- protegido ----------
 app.use(auth.requireAuth);
