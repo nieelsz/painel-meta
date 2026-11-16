@@ -11,13 +11,14 @@ npm install
 cp .env.example .env   # primeira vez; ajuste APP_PASSWORD
 npm start              # http://localhost:3000
 npm run dev            # reinicia ao salvar (node --watch)
+npm test               # testes dos webhooks (status, valores, datas)
 ```
 
 `DEMO_MODE=true` no `.env` usa dados fictícios (banco `data/demo.db`). Com `false`, usa `data/painel.db` e a API real da Meta. Para recriar os dados de demonstração: apague `data/demo.db`.
 
 ## Stack
 
-- Node.js 18+ (usa `fetch` nativo), Express, better-sqlite3, dotenv. Sem framework no frontend.
+- Node.js 22+ (exigido pelo better-sqlite3 13; no Windows instale com `npm install --ignore-scripts`), Express, better-sqlite3, dotenv. Sem framework no frontend.
 - Frontend: HTML/CSS/JS puro em `public/`, gráficos com ECharts (servido de `node_modules`), mapa do Brasil em `public/vendor/brazil-states.json`, fonte Manrope local em `public/vendor/manrope.woff2`.
 
 ## Estrutura
