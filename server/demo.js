@@ -101,6 +101,8 @@ module.exports = {
     const m = aggregate(tree.campaigns.filter(c => c.account_id === id).map(c => campDay(c, day)));
     return { day, ...m };
   }),
+  campaignDaily: (id, from, to) => days(from, to).flatMap(day => tree.campaigns.filter(c => c.account_id === id)
+    .map(c => { const m = campDay(c, day); return m && { day, campaign_id: c.id, ...m }; }).filter(Boolean)),
   listEntities: (accountId, level, parentId, from, to) => {
     if (level === 'campaign') {
       return tree.campaigns.filter(c => c.account_id === accountId).map(c => ({

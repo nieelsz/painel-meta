@@ -25,14 +25,14 @@ function toast(msg, type = 'ok') {
   el.className = `toast ${type}`; el.textContent = msg;
   $('#toasts').appendChild(el); setTimeout(() => el.remove(), 4500);
 }
-function modal({ title, body, confirm = 'Confirmar', danger = false, onOpen, onConfirm }) {
+function modal({ title, body, confirm = 'Confirmar', danger = false, onOpen, onConfirm, onCancel }) {
   const bg = document.createElement('div');
   bg.className = 'modal-bg';
   bg.innerHTML = `<div class="modal"><h3>${title}</h3><div class="mbody">${body || ''}</div>
     <div class="actions"><button class="btn ghost" data-x>Cancelar</button><button class="btn ${danger ? 'danger' : 'primary'}" data-ok>${confirm}</button></div></div>`;
   document.body.appendChild(bg);
   const close = () => bg.remove();
-  bg.addEventListener('click', e => { if (e.target === bg || e.target.hasAttribute('data-x')) close(); });
+  bg.addEventListener('click', e => { if (e.target === bg || e.target.hasAttribute('data-x')) { close(); if (onCancel) onCancel(); } });
   const ok = $('[data-ok]', bg);
   ok.addEventListener('click', async () => {
     ok.disabled = true;
@@ -188,7 +188,8 @@ async function renderDashboard() {
       drawDashboard(d, prev);
       const br = s => s.split('-').reverse().join('/');
       $('#subtitle').textContent = from === to ? br(from) : `${br(from)} até ${br(to)}`;
-      $('#warn').innerHTML = d.warnings.length ? `<div class="alert">Algumas contas não responderam: ${esc(d.warnings.join('; '))}</div>` : '';
+      $('#warn').innerHTML = (d.warnings.length ? `<div class="alert">Algumas contas não responderam: ${esc(d.warnings.join('; '))}</div>` : '')
+        + d.notes.map(n => `<div class="alert">${esc(n)}</div>`).join('');
       markUpdated();
     } catch (e) { toast(e.message, 'err'); }
     $('#dash').classList.remove('loading');
@@ -496,15 +497,19 @@ function drawTable() {
     M.parents.push({ id: r.id, name: r.name, level: r.level, account_id: r.account_id });
     M.tab = r.level === 'campaign' ? 'adset' : 'ad'; M.paintTabs(); M.reload();
   });
-  $$('[data-toggle]').forEach(inp => inp.onchange = async () => {
-    const r = byId(inp.dataset.toggle); const status = inp.checked ? 'ACTIVE' : 'PAUSED';
-    inp.disabled = true;
-    try {
-      await api('/api/meta/status', { method: 'POST', body: { account_id: r.account_id, id: r.id, status, name: r.name } });
-      r.status = status; toast(`${status === 'ACTIVE' ? 'Ativado' : 'Pausado'}: ${r.name}`);
-      setTimeout(() => M.reload(), 800);
-    } catch (e) { inp.checked = !inp.checked; toast(e.message, 'err'); }
-    inp.disabled = false;
+  $$('[data-toggle]').forEach(inp => inp.onchange = () => {
+    const r = byId(inp.dataset.toggle); const on = inp.checked; const status = on ? 'ACTIVE' : 'PAUSED';
+    const what = { campaign: 'a campanha', adset: 'o conjunto', ad: 'o anúncio' }[r.level];
+    modal({
+      title: on ? 'Ativar?' : 'Pausar?', confirm: on ? 'Ativar' : 'Pausar', danger: on,
+      body: `<p class="muted">${on ? 'Ativar' : 'Pausar'} ${what} <b>${esc(r.name)}</b>?${on ? ' Ao ativar, volta a gastar dinheiro.' : ''}</p>`,
+      onCancel: () => { inp.checked = !on; },
+      onConfirm: async () => {
+        await api('/api/meta/status', { method: 'POST', body: { account_id: r.account_id, id: r.id, status, name: r.name } });
+        r.status = status; toast(`${on ? 'Ativado' : 'Pausado'}: ${r.name}`);
+        setTimeout(() => M.reload(), 800);
+      },
+    });
   });
   $$('[data-budget]').forEach(b => b.onclick = () => budgetModal(byId(b.dataset.budget), Number(b.dataset.pct || 0)));
   $$('[data-dup]').forEach(b => b.onclick = () => {
@@ -538,18 +543,28 @@ function budgetModal(r, presetPct) {
     body: `<p class="muted" style="margin:0 0 16px">${esc(r.name)}</p>
       <label class="field">Novo orçamento (R$)<input class="input" type="number" min="1" step="0.01" id="bv" value="${start}"></label>
       <div class="chips">${[-30, -20, -10, 10, 20, 30, 50, 100].map(p => `<button class="btn sm ${p > 0 ? 'up' : 'down'}" data-p="${p}">${p > 0 ? '+' : ''}${p}%</button>`).join('')}</div>
-      <div class="preview" id="bprev"></div>`,
+      <div class="preview" id="bprev"></div><div id="bwarn"></div>`,
     confirm: 'Salvar orçamento',
     onOpen: bg => {
       const inp = $('#bv', bg);
-      const prev = () => { const v = Number(inp.value) || 0; const d = cur ? (v / cur - 1) : 0; $('#bprev', bg).innerHTML = `<span class="muted">${brl(cur)}</span>${I.chev}<b>${brl(v)}</b><span class="delta ${d > 0 ? 'good' : d < 0 ? 'bad' : 'flat'}" style="margin-left:auto">${d > 0 ? '+' : ''}${pct(d)}</span>`; };
+      const prev = () => {
+        delete bg.dataset.big; $('#bwarn', bg).innerHTML = ''; $('[data-ok]', bg).textContent = 'Salvar orçamento';
+        const v = Number(inp.value) || 0; const d = cur ? (v / cur - 1) : 0; $('#bprev', bg).innerHTML = `<span class="muted">${brl(cur)}</span>${I.chev}<b>${brl(v)}</b><span class="delta ${d > 0 ? 'good' : d < 0 ? 'bad' : 'flat'}" style="margin-left:auto">${d > 0 ? '+' : ''}${pct(d)}</span>`; };
       $$('[data-p]', bg).forEach(b => b.onclick = () => { inp.value = (cur * (1 + Number(b.dataset.p) / 100)).toFixed(2); prev(); });
       inp.oninput = prev; prev(); inp.focus(); inp.select();
     },
     onConfirm: async bg => {
       const v = Number($('#bv', bg).value);
       if (!v || v < 1) { toast('Valor inválido', 'err'); return false; }
-      await api('/api/meta/budget', { method: 'POST', body: { account_id: r.account_id, id: r.id, cents: Math.round(v * 100), previous: r.daily_budget, name: r.name } });
+      // aumento acima de 50% pede um segundo clique (evita digitar 5000 querendo 50,00)
+      const big = !cur || v > cur * 1.5;
+      if (big && !bg.dataset.big) {
+        bg.dataset.big = '1';
+        $('#bwarn', bg).innerHTML = `<div class="alert" style="margin:14px 0 0">Aumento grande: de <b>${brl(cur)}</b> para <b>${brl(v)}</b>/dia${cur ? ` (+${pct(v / cur - 1, 0)})` : ''}. Confira o valor e clique de novo para confirmar.</div>`;
+        $('[data-ok]', bg).textContent = 'Confirmar aumento';
+        return false;
+      }
+      await api('/api/meta/budget', { method: 'POST', body: { account_id: r.account_id, id: r.id, cents: Math.round(v * 100), previous: r.daily_budget, name: r.name, confirmed: big } });
       toast(`Orçamento atualizado: ${brl(v)}/dia`);
       M.reload();
     },

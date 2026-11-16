@@ -101,6 +101,19 @@ function salesByEntity(from, to) {
   return map;
 }
 
+// produto de cada campanha = o mais vendido nas UTMs dela (todo o histórico)
+function campaignProducts() {
+  const rows = db.prepare(`SELECT product, utm_source, utm_medium, utm_campaign, utm_content, utm_term, COUNT(*) n FROM sales
+    WHERE product IS NOT NULL GROUP BY product, utm_source, utm_medium, utm_campaign, utm_content, utm_term`).all();
+  const count = {};
+  for (const r of rows) for (const id of sales.idsInUtm(r)) {
+    const c = count[id] || (count[id] = {}); c[r.product] = (c[r.product] || 0) + r.n;
+  }
+  const out = {};
+  for (const [id, c] of Object.entries(count)) out[id] = Object.entries(c).sort((a, b) => b[1] - a[1])[0][0];
+  return out;
+}
+
 app.get('/api/meta/entities', wrap(async (req, res) => {
   const { from, to } = range(req.query);
   const level = req.query.level || 'campaign';
@@ -127,7 +140,9 @@ app.post('/api/meta/status', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 app.post('/api/meta/budget', wrap(async (req, res) => {
-  const { account_id, id, cents, name, previous } = req.body;
+  const { account_id, id, cents, name, previous, confirmed } = req.body;
+  // trava contra erro de digitação: dobrar o orçamento (ou sem valor anterior) exige confirmação explícita
+  if (!confirmed && (!previous || Number(cents) > previous * 2)) return res.status(400).json({ error: 'Aumento acima de 100% precisa ser confirmado' });
   await meta.setBudget(account_id, id, cents);
   log(id, name, 'orçamento', `${previous ? (previous / 100).toFixed(2) : '?'} → ${(cents / 100).toFixed(2)}`);
   res.json({ ok: true });
@@ -176,8 +191,22 @@ app.get('/api/dashboard', wrap(async (req, res) => {
   }
   if (req.query.account) { accounts = accounts.filter(a => a === req.query.account); accountFiltered = true; }
 
-  const warnings = [];
-  const dailies = await Promise.all(accounts.map(a => meta.accountDaily(a, from, to).catch(e => { warnings.push(`${a}: ${e.message}`); return []; })));
+  const warnings = []; const notes = [];
+  let dailies;
+  if (products.length) {
+    // com filtro de produto, o gasto é só o das campanhas daquele produto
+    const owner = campaignProducts();
+    const rows = (await Promise.all(accounts.map(a => meta.campaignDaily(a, from, to).catch(e => { warnings.push(`${a}: ${e.message}`); return []; })))).flat();
+    const unknown = {};
+    dailies = [rows.filter(r => {
+      if (!owner[r.campaign_id] && r.spend > 0) unknown[r.campaign_id] = (unknown[r.campaign_id] || 0) + r.spend;
+      return products.includes(owner[r.campaign_id]);
+    })];
+    const n = Object.keys(unknown).length;
+    if (n) notes.push(`${n} ${n === 1 ? 'campanha' : 'campanhas'} sem venda registrada (produto desconhecido), com R$ ${Object.values(unknown).reduce((a, b) => a + b, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} de gasto, não ${n === 1 ? 'entrou' : 'entraram'} no gasto deste filtro.`);
+  } else {
+    dailies = await Promise.all(accounts.map(a => meta.accountDaily(a, from, to).catch(e => { warnings.push(`${a}: ${e.message}`); return []; })));
+  }
   const spendByDay = {};
   for (const d of dailies.flat()) spendByDay[d.day] = (spendByDay[d.day] || 0) + d.spend;
   const mt = meta.sumMetrics(dailies.flat());
@@ -219,7 +248,7 @@ app.get('/api/dashboard', wrap(async (req, res) => {
   const paid = approved.length + refunded.length + cb.length;
 
   res.json({
-    range: { from, to }, warnings, updated_at: new Date().toISOString(),
+    range: { from, to }, warnings, notes, updated_at: new Date().toISOString(),
     kpis: {
       gross, net, spend, taxes, profit,
       roas: spend ? net / spend : 0, roi: spend ? profit / spend : 0, margin: net ? profit / net : 0,

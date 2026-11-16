@@ -123,6 +123,19 @@ async function accountDaily(accountId, from, to) {
   });
 }
 
+// gasto diário + funil por campanha (usado no filtro por produto)
+async function campaignDaily(accountId, from, to) {
+  if (DEMO()) return demo.campaignDaily(accountId, from, to);
+  const token = tokenFor(accountId);
+  return cached(`cdaily:${accountId}:${from}:${to}`, async () => {
+    const rows = await graphAll(`${accountId}/insights`, {
+      level: 'campaign', time_increment: 1, fields: `campaign_id,${INS_FIELDS}`,
+      time_range: { since: from, until: to }, limit: 500,
+    }, token, 30);
+    return rows.map(r => ({ day: r.date_start, campaign_id: r.campaign_id, ...parseInsights(r) }));
+  });
+}
+
 // lista campanhas / conjuntos / anúncios com métricas do período
 async function listEntities(accountId, level, parentId, from, to) {
   if (DEMO()) return demo.listEntities(accountId, level, parentId, from, to);
@@ -179,4 +192,4 @@ async function duplicate(accountId, id, level) {
   return graph(`${id}/copies`, { status_option: 'PAUSED', ...(level !== 'ad' ? { deep_copy: 'true' } : {}) }, tokenFor(accountId), 'POST');
 }
 
-module.exports = { discoverAccounts, accountDetails, accountDaily, listEntities, setStatus, setBudget, duplicate, sumMetrics, clearCache };
+module.exports = { discoverAccounts, accountDetails, accountDaily, campaignDaily, listEntities, setStatus, setBudget, duplicate, sumMetrics, clearCache };
